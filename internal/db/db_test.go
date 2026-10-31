@@ -2,6 +2,10 @@ package db_test
 
 import (
 	"context"
+	"database/sql"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -62,5 +66,53 @@ func TestRefusesNewerSchema(t *testing.T) {
 	err = d.Migrate(ctx)
 	if err == nil || !strings.Contains(err.Error(), "newer than this binary") {
 		t.Fatalf("want newer-schema error, got %v", err)
+	}
+}
+
+func TestOpenSpecialDataDir(t *testing.T) {
+	for _, relative := range []bool{false, true} {
+		pathType := "absolute"
+		if relative {
+			pathType = "relative"
+		}
+		for _, test := range []struct{ name, dir string }{
+			{"hash", "plants#1"},
+			{"question_mark", "plants?1"},
+			{"percent", "plants%20off"},
+			{"space", "plants space"},
+		} {
+			t.Run(pathType+"/"+test.name, func(t *testing.T) {
+				if runtime.GOOS == "windows" && test.name == "question_mark" {
+					t.Skip("Windows does not allow question marks in directory names")
+				}
+				root := t.TempDir()
+				dataDir := filepath.Join(root, test.dir)
+				if relative {
+					t.Chdir(root)
+					dataDir = test.dir
+				}
+				database, err := db.Open(dataDir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer database.Close()
+				if _, err := os.Stat(filepath.Join(dataDir, db.FileName)); err != nil {
+					t.Fatalf("database not at requested path: %v", err)
+				}
+				for _, pool := range []*sql.DB{database.Read, database.Write} {
+					for _, pragma := range []struct{ name, want string }{
+						{"foreign_keys", "1"}, {"journal_mode", "wal"}, {"busy_timeout", "5000"}, {"synchronous", "1"},
+					} {
+						var got string
+						if err := pool.QueryRow("PRAGMA " + pragma.name).Scan(&got); err != nil {
+							t.Fatal(err)
+						}
+						if got != pragma.want {
+							t.Errorf("%s = %q, want %q", pragma.name, got, pragma.want)
+						}
+					}
+				}
+			})
+		}
 	}
 }

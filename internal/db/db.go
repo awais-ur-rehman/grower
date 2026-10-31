@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/reilandeubank/grower/internal/db/dbgen"
 
@@ -68,7 +69,15 @@ func openPool(path string, readOnly bool) (*sql.DB, error) {
 		// Take the write lock at BEGIN so a transaction never fails half-way on upgrade.
 		q.Set("_txlock", "immediate")
 	}
-	dsn := "file:" + path + "?" + q.Encode()
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("resolve sqlite path %q: %w", path, err)
+	}
+	uriPath := filepath.ToSlash(absPath)
+	if !strings.HasPrefix(uriPath, "/") {
+		uriPath = "/" + uriPath // A Windows drive letter belongs in the path, not the URI host.
+	}
+	dsn := (&url.URL{Scheme: "file", Path: uriPath, RawQuery: q.Encode()}).String()
 
 	pool, err := sql.Open("sqlite", dsn)
 	if err != nil {
